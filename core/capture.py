@@ -13,6 +13,7 @@ class PacketCapture:
         self.server_address = None
         self.stream_code = None
         self.capture_threads = {}
+        self.interface_status = {}
         self.lock = threading.Lock()
 
     def start(self, interface_display_name):
@@ -61,12 +62,25 @@ class PacketCapture:
             return
 
         self.is_capturing = False
-        if self.capture_thread and self.capture_thread.is_alive():
-            # 不要尝试join当前线程
-            if threading.current_thread() != self.capture_thread:
-                self.capture_thread.join(timeout=1.0)
+        
+        # 停止所有接口的捕获
+        for interface in self.interface_status:
+            self.interface_status[interface] = False
+        
+        # 使用更短的超时时间并并行等待所有线程
+        current_thread = threading.current_thread()
+        active_threads = []
+        for interface, thread in self.capture_threads.items():
+            if thread and thread.is_alive() and current_thread != thread:
+                active_threads.append(thread)
+        
+        for thread in active_threads:
+            thread.join(timeout=0.2)
+                
+        # 清理线程记录
+        self.capture_threads.clear()
         self.capture_thread = None
-        self.logger.info("停止捕获数据包")
+        self.logger.info("停止所有接口的数据包捕获")
 
     def add_callback(self, callback):
         """添加回调函数"""
@@ -81,6 +95,8 @@ class PacketCapture:
         self.server_address = None
         self.stream_code = None
         self.is_capturing = True
+        self.capture_threads.clear()  # 清理之前的线程记录
+        self.interface_status.clear()  # 清空接口状态
 
         # 获取Windows网络接口列表
         from scapy.arch.windows import get_windows_if_list
@@ -94,11 +110,13 @@ class PacketCapture:
                 # 查找匹配的接口
                 interface_found = None
                 for iface in windows_interfaces:
-                    if iface.get("name") == interface:  # 直接匹配接口名称
+                    if iface.get("name") == interface:
                         interface_found = iface.get("name")
                         break
 
                 if interface_found:
+                    # 初始化接口状态
+                    self.interface_status[interface_found] = True
                     # 为每个接口创建独立的捕获线程
                     thread = threading.Thread(
                         target=self._start_capture, args=(interface_found,)
@@ -109,7 +127,7 @@ class PacketCapture:
                     self.logger.info(f"开始在接口 {interface_found} 上捕获数据包")
             except Exception as e:
                 self.logger.error(
-                    f"启动接口 {interface_display_name} 捕获时发生错误: {str(e)}"
+                    f"启动接口 {interface_display_name} 捕获时发生错误: {str(e)}，如果数据包监控有一条条日志在跑，则忽略此错误"
                 )
 
     def _start_capture(self, interface):
@@ -117,14 +135,14 @@ class PacketCapture:
         try:
             sniff(
                 iface=interface,
-                prn=self._packet_callback,
-                stop_filter=lambda x: not self.is_capturing,
+                prn=lambda x: self._packet_callback(x, interface), 
+                stop_filter=lambda x: not self.interface_status.get(interface, False),
             )
         except Exception as e:
             self.logger.error(f"捕获过程中发生错误: {str(e)}")
-            self.is_capturing = False
+            self.interface_status[interface] = False
 
-    def _packet_callback(self, packet):
+    def _packet_callback(self, packet, interface):
         """处理捕获的数据包"""
         try:
             if IP in packet and TCP in packet and Raw in packet:
@@ -171,19 +189,19 @@ class PacketCapture:
                                     f"\n>>> 找到推流码 <<<\n推流码:{self.stream_code}"
                                 )
 
-                        # 当两个信息都获取到时，触发回调并停止所有接口的捕获
+                        # 当两个信息都获取到时，停止所有接口的捕获
                         if self.server_address and self.stream_code:
                             # 先触发回调
                             for callback in self.callbacks:
                                 try:
                                     callback(self.server_address, self.stream_code)
                                 except Exception as e:
-                                    self.logger.error(
-                                        f"执行回调函数时发生错误: {str(e)}"
-                                    )
-                            # 停止捕获并更新状态
+                                    self.logger.error(f"执行回调函数时发生错误: {str(e)}")
+                            # 停止所有接口的捕获
+                            for iface in self.interface_status:
+                                self.interface_status[iface] = False
                             self.is_capturing = False
-                            self.logger.info("已获取所需信息，停止捕获")
+                            self.logger.info("已获取所需信息，停止所有接口捕获")
 
                 except UnicodeDecodeError:
                     pass  # 忽略无法解码的数据包

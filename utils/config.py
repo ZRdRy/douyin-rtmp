@@ -1,6 +1,5 @@
 # 版本信息
-VERSION = "v1.0.7"
-
+VERSION = "v1.0.8"
 # GitHub 相关配置
 GITHUB_CONFIG = {
     "REPO_OWNER": "heplex",
