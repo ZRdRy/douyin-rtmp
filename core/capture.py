@@ -139,7 +139,7 @@ class PacketCapture:
                 stop_filter=lambda x: not self.interface_status.get(interface, False),
             )
         except Exception as e:
-            self.logger.error(f"捕获过程中发生错误: {str(e)}")
+            self.logger.error(f"捕获过程中发生错误: {str(e)}，如果数据包监控有一条条日志在跑，则忽略此错误")
             self.interface_status[interface] = False
 
     def _packet_callback(self, packet, interface):
